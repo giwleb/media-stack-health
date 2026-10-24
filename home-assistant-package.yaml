@@ -1,0 +1,96 @@
+# Install as /config/packages/media_stack_health.yaml (see README).
+# Installer replaces REPLACE_WITH_RANDOM_WEBHOOK with a private random ID.
+input_datetime:
+  media_stack_last_check:
+    name: Media stack last health check
+    has_date: true
+    has_time: true
+input_boolean:
+  media_stack_watchdog_alerted:
+    name: Media stack missed heartbeat alert
+
+script:
+  media_stack_health_notify:
+    alias: Media stack health notification
+    mode: queued
+    max: 10
+    fields:
+      title:
+        description: Notification title
+      message:
+        description: Notification body
+    sequence:
+      - action: persistent_notification.create
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+          notification_id: media_stack_health
+      # Optional iPhone push: uncomment and replace with your actual notify action.
+      # - action: notify.mobile_app_YOUR_IPHONE
+      #   data:
+      #     title: "{{ title }}"
+      #     message: "{{ message }}"
+      #     data:
+      #       tag: media_stack_health
+
+automation:
+  - id: media_stack_health_receive
+    alias: Media stack health - receive heartbeat and changes
+    mode: queued
+    triggers:
+      - trigger: webhook
+        webhook_id: REPLACE_WITH_RANDOM_WEBHOOK
+        allowed_methods:
+          - POST
+        local_only: true
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.media_stack_last_check
+        data:
+          timestamp: "{{ now().timestamp() }}"
+      - if:
+          - condition: state
+            entity_id: input_boolean.media_stack_watchdog_alerted
+            state: "on"
+        then:
+          - action: script.media_stack_health_notify
+            data:
+              title: Media stack monitor is back
+              message: Health checks are arriving again. Check the latest report for service status.
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.media_stack_watchdog_alerted
+      - if:
+          - condition: template
+            value_template: "{{ trigger.json.notify | default(false) }}"
+        then:
+          - action: script.media_stack_health_notify
+            data:
+              title: "{{ trigger.json.title | default('Media stack health') }}"
+              message: "{{ trigger.json.message | default('Check the monitor report.') }}"
+
+  - id: media_stack_health_deadman
+    alias: Media stack health - missed heartbeat
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: template
+        value_template: >-
+          {% set last = state_attr('input_datetime.media_stack_last_check', 'timestamp') | float(0) %}
+          {{ last > 0 and now().timestamp() - last > 2100 }}
+      - condition: state
+        entity_id: input_boolean.media_stack_watchdog_alerted
+        state: "off"
+    actions:
+      - action: script.media_stack_health_notify
+        data:
+          title: Media stack health monitor missing
+          message: >-
+            No health check received for more than 35 minutes. The Pi, monitor,
+            network path, or Home Assistant webhook may be unavailable.
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.media_stack_watchdog_alerted
