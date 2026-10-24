@@ -1,0 +1,5 @@
+health-config.json
+home-assistant-package.yaml
+state/
+.env
+__pycache__/
